@@ -32,3 +32,8 @@ go.work.sum
 # .vscode/
 .tokensave
 .DS_Store
+
+# Local agent/tool state
+.serena/
+.procoder/state/
+.claude/settings.local.json
