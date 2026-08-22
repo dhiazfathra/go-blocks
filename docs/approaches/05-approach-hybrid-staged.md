@@ -131,21 +131,28 @@ pattern with two instances gets a helper function, not a generator.
 from the Stage 2 annotations.
 
 **Deliverables.** A generated registry describing resources, actions, arguments,
-policies, and PII classifications; four consumers of it — auto-generated admin UI,
-MCP-style agent tool surface, DSAR/erasure/retention reporting, and generic
-list/filter/sort endpoints; a `/debug/resources` introspection endpoint.
+policies, and PII classifications; a set of **generated per-resource data adapters**
+registered alongside that metadata, each exposing a fixed, narrow contract — subject
+matching, single-record read, relationship traversal, and paged list with filters — so
+that DSAR export and the generic list endpoints have a data path instead of only a
+description; four consumers of the pair — auto-generated admin UI, MCP-style agent tool
+surface, DSAR/erasure/retention reporting, and generic list/filter/sort endpoints; a
+`/debug/resources` introspection endpoint.
 
 **Exit criteria.** Admin UI covers 80 % of back-office CRUD with no per-resource
 frontend code. A DSAR export for one subject across all modules runs from the registry
-alone. Agent tool surface exposes every annotated action with no hand-written
-descriptors. Zero business-logic dispatch goes through the registry — verifiable by
-grep and by an architecture test.
+and its generated adapters alone, with no per-module DSAR code. Agent tool surface
+exposes every annotated action with no hand-written descriptors. Zero business-logic
+dispatch goes through the registry or its adapters — the adapters expose reads only,
+never actions, and an architecture test asserts that no adapter method invokes a module
+use case.
 
 **Team.** Two engineers, one frontend.
 
 **Out of scope.** A general interpreter. No dynamic action definition at runtime, no
 resources defined in YAML or the database, no rules engine. Business logic stays static
-compiled Go; the registry is metadata about it, never a substitute for it.
+compiled Go; the registry is metadata plus read-only data adapters, never a substitute
+for the business layer — no adapter may write, and no adapter may dispatch an action.
 
 ### Stage 4 — Ecosystem (ongoing, month 12+)
 
@@ -181,28 +188,62 @@ type Resolver interface {
 	FromContext(ctx context.Context) (Tenant, error)
 }
 
-// blocks/audit/audit.go
-type Event struct {
-	Actor    string
-	Action   string
-	Resource string
-	Entity   string
-	Before   any
-	After    any
+// blocks/audit/audit.go — payloads are classified and redacted before they are a
+// value of this type; `any` here would be an open invitation to log raw PII.
+type Payload struct {
+	Fields map[string]Value // redacted per pii.Class at construction time
 }
 
+type Value struct {
+	Class     pii.Class
+	Redacted  string // rendered form, already masked or hashed for PII classes
+	Truncated bool
+}
+
+type Event struct {
+	Actor     Actor  // required
+	TenantID  string // required
+	Action    string // required
+	Resource  string // required
+	Entity    string // required for entity-scoped actions
+	Outcome   Outcome // required: allowed, denied, or failed
+	Reason    string  // required when Outcome is not allowed
+	Channel   string  // required: api, admin, job, migration
+	RequestID string  // required; correlates to the transport request
+	At        time.Time
+	Before    *Payload
+	After     *Payload
+}
+
+// Record fails closed: it returns an error, and writes nothing, if any required
+// field is empty or if a Payload contains a field with no pii.Class assigned.
+// Callers build Payloads through audit.Redact(classifier, resource, m), which is
+// the only exported constructor.
 type Recorder interface {
 	Record(ctx context.Context, e Event) error
 }
 
-// blocks/authz/authz.go
+// blocks/authz/authz.go — the request is structured, because the adopted policies
+// evaluate attributes (input.outlet_id, resource.outlet_id), not just names.
+type Attrs map[string]any
+
+type Request struct {
+	Actor    Actor  // subject identity, roles, and tenant membership
+	Action   string // e.g. "menu_item.update"
+	Resource string // resource type, e.g. "menu_item"
+	Entity   string // resource instance ID, empty for collection actions
+	Input    Attrs  // attributes of the request payload
+	Attrs    Attrs  // attributes of the stored resource, when loaded
+	Tenant   tenancy.Tenant
+}
+
 type Decision struct {
 	Allowed bool
 	Reason  string
 }
 
 type Enforcer interface {
-	Check(ctx context.Context, action, resource, entity string) (Decision, error)
+	Check(ctx context.Context, r Request) (Decision, error)
 }
 
 // blocks/pii/pii.go
@@ -220,10 +261,20 @@ type Classifier interface {
 ```
 
 A Stage 1 handler calls `Enforcer.Check` and `Recorder.Record` directly. A Stage 2
-generated handler calls exactly the same methods — the generator writes the call, not
-the contract. A Stage 3 registry entry is _derived from_ the annotations that also drove
-the generator, and the admin UI consumes `Classifier` and `Enforcer` through the same
-interfaces. Delete the generator and the hand-written path still compiles. Delete the
+generated handler must reach the same methods — but not necessarily by writing the same
+call. Approach 2's generated slice calls generated policy functions, Ent clients,
+`audit.Emit`, and `privacy.RedactMenuItem` directly, so the guarantee is not free: it
+holds only if every such generated symbol is a **thin adapter over a block interface**,
+never a parallel implementation of it. Concretely, `protoc-gen-blocks` and the `entc`
+extensions must emit adapters whose bodies delegate to `authz.Enforcer`,
+`audit.Recorder`, `tenancy.Resolver`, and `pii.Classifier`, and an architecture test in
+CI must assert that no generated package performs authorization, audit, tenancy, or
+redaction work except through those four interfaces — the same import-graph check that
+forbids blocks importing generated code, run in the other direction. Without that
+adapter rule and that test, Stage 2 forks the contract instead of implementing it, and
+the seam is a claim rather than a guarantee. A Stage 3 registry entry is _derived from_
+the annotations that also drove the generator, and the admin UI consumes `Classifier`
+and `Enforcer` through the same interfaces. Delete the generator and the hand-written path still compiles. Delete the
 registry and business logic is untouched. That is what "independently useful even if the
 next stage is never built" means concretely.
 
@@ -325,11 +376,17 @@ Stage 1 so call sites are in place, but only sensitive-class fields need it wire
 | 2     | Months 4–8    | 4         | 64             | Generated plumbing, Ent extensions, 10-minute resources                      |
 | 3     | Months 8–12   | 2 + 1     | 48             | Admin UI, agent tool surface, DSAR reporting                                 |
 | 4     | Month 12+     | 2–4       | 32 per quarter | POS, shop, Accurate integration, external adoption                           |
-|       | **12 months** |           | **~162**       | Full platform; ~40 delivered by month 4                                      |
+|       | **12 months** |           | **162**        | Stages 0–3 only; Stage 4 is ongoing and excluded                             |
 
-Roughly a third of first-year effort lands before the end of month four, and that third
-produces a shippable, compliant product on a maintainable foundation. Stages 2 and 3 are
-optional purchases made with evidence in hand.
+All figures are engineer-weeks from an empty repository, not increments on an existing
+blueprint. The **162** total covers Stages 0–3 (8 + 42 + 64 + 48); Stage 4 is excluded
+because it is ongoing rather than a one-time build, and adds 32 engineer-weeks per
+quarter for as long as it runs.
+
+Stage 0 plus Stage 1 is **50 engineer-weeks delivered by the end of month four** — just
+under a third of the 162-week Stages 0–3 figure — and that 50 produces a shippable,
+compliant product on a maintainable foundation. Stages 2 and 3 are optional purchases,
+112 engineer-weeks between them, made with evidence in hand.
 
 ## 10. Tradeoffs
 

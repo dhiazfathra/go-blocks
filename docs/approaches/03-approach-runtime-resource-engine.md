@@ -31,6 +31,7 @@ type MenuItem struct {
 	Status      string // draft | pending_approval | active | retired
 	CreatedBy   xid.ID
 	SubmittedAt *time.Time
+	UpdatedAt   time.Time
 }
 
 var Resource = res.New[MenuItem]("menu_item").
@@ -47,9 +48,13 @@ var Resource = res.New[MenuItem]("menu_item").
 		res.PII("created_by", res.Pseudonymous, res.LegalBasis.Contract, res.Retain(5*res.Years)),
 	).
 	Relationships(
+		res.BelongsTo[MenuItem, tenant.Tenant]("tenant", "TenantID"),
 		res.BelongsTo[MenuItem, outlet.Outlet]("outlet", "OutletID"),
 		res.HasMany[MenuItem, modifier.Group]("modifier_groups", "MenuItemID"),
+		res.HasMany[MenuItem, order.Line]("order_lines", "MenuItemID"),
 	).
+	// Aggregate filters resolve against the related resource, so `created_at`
+	// and `line_total` here are order.Line fields, not MenuItem ones.
 	Aggregates(
 		res.Count[MenuItem]("orders_30d", "order_lines").
 			Where(res.Gt("created_at", res.Rel("now-30d"))),
@@ -131,7 +136,7 @@ resolved plan.
 
 ```
 Resolve → Authorize (pre) → Cast arguments → Validate → Apply changes →
-Authorize (post, on the changeset) → Transact → Audit → Notify
+Authorize (post, on the changeset) → Transact [ persist → Audit ] → Commit → Notify
 ```
 
 Stage detail:
@@ -148,11 +153,12 @@ Stage detail:
 4. **Changes.** Composable middleware, `func(context.Context, *Changeset[T]) error`,
    run in declaration order. `Changeset[T]` is generic; only the pipeline's outer edge is
    not.
-5. **Transact.** One transaction per action by default. Notifications are buffered and
-   flushed after commit; audit rows are written inside the transaction so no committed
-   change can lack an audit record.
-6. **Audit and notify.** Audit derives its diff from the changeset, redacting fields
-   marked in `Classify`.
+5. **Transact.** One transaction per action by default. Persist and audit both run
+   inside it — the commit happens only after the audit rows are written, so no committed
+   change can lack an audit record and a failed audit rolls the change back. Audit
+   derives its diff from the changeset, redacting fields marked in `Classify`.
+6. **Notify.** Notifications are buffered during the transaction and flushed only after
+   commit, so no subscriber ever sees a change that was rolled back.
 
 **Query translation.** The declared read action plus incoming filter/sort/page input
 compiles to a normalized query IR (predicate tree, projection, joins for relationships,

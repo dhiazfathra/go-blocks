@@ -81,7 +81,8 @@ package inproc
 // without a socket. Interceptors still run, so audit/authz/otel behave
 // identically in both modes.
 type Hub struct {
-	methods map[string]grpc.MethodHandler
+	methods map[string]grpc.MethodHandler // generated _ServiceDesc handlers
+	impls   map[string]any                // service implementation per method
 	chain   grpc.UnaryServerInterceptor
 }
 
@@ -90,7 +91,17 @@ func (h *Hub) Invoke(ctx context.Context, method string, args, reply any, _ ...g
 	if !ok {
 		return status.Errorf(codes.Unimplemented, "inproc: %s", method)
 	}
-	return handler(ctx, args, reply, h.chain)
+	// The generated handler owns the request type; the decoder hands it our args.
+	dec := func(dst any) error {
+		proto.Merge(dst.(proto.Message), args.(proto.Message))
+		return nil
+	}
+	resp, err := handler(h.impls[method], ctx, dec, h.chain)
+	if err != nil {
+		return err
+	}
+	proto.Merge(reply.(proto.Message), resp.(proto.Message))
+	return nil
 }
 
 func (h *Hub) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
@@ -127,7 +138,7 @@ named dependency, Kratos middleware where relevant, and a `usage-rules.md`.
 | tenancy       | `blocks/tenancy`       | Ent privacy policies                         | `FromContext(ctx) (TenantID, error)`; injects row predicates in the data layer.                  |
 | consent       | `blocks/consent`       | own tables + `blocks/audit`                  | `Grant/Revoke/Check(ctx, Subject, Purpose)`; purpose-bound (GDPR Art. 6/7, PDP Art. 20).         |
 | retention     | `blocks/retention`     | asynq/river schedules                        | `Register(Policy)`; sweeps expiring rows to soft-delete then hard-delete.                        |
-| crypto        | `blocks/crypto`        | `filippo.io/age`, Ent field hooks, KMS       | `Encrypt/Decrypt(ctx, purpose, []byte)`; envelope keys, per-tenant DEK.                          |
+| crypto        | `blocks/crypto`        | `filippo.io/age`, Ent field hooks, KMS       | `Encrypt/Decrypt(ctx, purpose, []byte)`; envelope keys, per-subject DEK.                         |
 | media         | `blocks/media`         | MinIO SDK                                    | `Put/Presign/Delete(ctx, Object)`; content-type sniffing, virus-scan hook.                       |
 | jobs          | `blocks/jobs`          | asynq (Redis) or river (Postgres)            | `Enqueue(ctx, Task)` + typed handler registration with retry/backoff policy.                     |
 | events        | `blocks/events`        | Ent tx + outbox table + Watermill            | `Publish(tx, Event) error` transactionally; at-least-once dispatch to subscribers.               |
@@ -214,8 +225,12 @@ type PriceChangeUC struct {
 }
 
 func (uc *PriceChangeUC) Propose(ctx context.Context, in ProposeInput) (*PriceChange, error) {
-	if err := uc.authz.Require(ctx, "menu.price", "propose", in.ItemID); err != nil {
+	allowed, err := uc.authz.Check(ctx, authz.SubjectFromContext(ctx), "menu.price.propose", in.ItemID)
+	if err != nil {
 		return nil, err
+	}
+	if !allowed {
+		return nil, authz.ErrDenied
 	}
 	item, err := uc.items.Get(ctx, in.ItemID) // tenancy predicate applied in data layer
 	if err != nil {
@@ -245,16 +260,19 @@ func (uc *PriceChangeUC) Propose(ctx context.Context, in ProposeInput) (*PriceCh
 				return err
 			}
 		}
+		// Audit is written inside the same transaction: no commit without its
+		// record, and a recorder failure rolls the price change back.
+		if err := uc.audit.Record(data.WithTx(ctx, tx), audit.Event{
+			Action: "menu.price_change.propose", Resource: item.ID,
+			Before: item.Price.String(), After: in.NewPrice.String(), Reason: in.Reason,
+		}); err != nil {
+			return err
+		}
 		return uc.events.Publish(tx, events.New("menu.price_change.proposed", pc))
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	uc.audit.Record(ctx, audit.Event{
-		Action: "menu.price_change.propose", Resource: item.ID,
-		Before: item.Price.String(), After: in.NewPrice.String(), Reason: in.Reason,
-	})
 	return pc, nil
 }
 ```
@@ -315,7 +333,8 @@ interceptor plus `tenancy` row predicates in Ent privacy policies, so a forgotte
 cannot leak across tenants. Logging and monitoring (A.8.15–A.8.16) via `audit` Ent hooks
 that record actor, tenant, before/after, and reason on every mutation, into an append-only
 table. Cryptography (A.8.24, GDPR Art. 32) via `crypto` field-level envelope encryption
-with per-tenant DEKs. Data-subject rights: `pii` annotations generate the field
+with per-subject DEKs, so key destruction is a usable erasure strategy (see
+`10-compliance-blocks.md`). Data-subject rights: `pii` annotations generate the field
 classification inventory, which makes Art. 15 export and Art. 17 erasure a traversal over
 annotated fields rather than an archaeology exercise; `retention` enforces storage
 limitation (Art. 5(1)(e)) with scheduled sweeps; `consent` gives purpose-bound lawful

@@ -79,7 +79,11 @@ behaves like PPN in the ledger; and a group operating both restaurants and a pac
 retail line can be simultaneously PBJT-liable on one revenue stream and PPN-liable on
 another. Modelling tax as a single global percentage is the most common and most
 expensive mistake in Indonesian POS software. Service charge is separate again — it is
-revenue, commonly 5%, and is itself part of the PBJT base.
+revenue, commonly 5%, and when billed to the consumer it forms part of the PBJT base
+while staying a distinct amount from the PBJT charge itself. `TaxRule`, `PBJTRate`, and
+`ServiceChargeRule` are therefore versioned and scoped to the outlet's jurisdiction, and
+every order snapshots the `tax_profile_id` and the rule versions it was priced under, so
+a historical order can always be recomputed on its original basis.
 
 **`accounting`** is deliberately a module and not a library. It holds the
 anti-corruption layer, the posting state machine, and the reconciliation runs. Nothing
@@ -163,10 +167,16 @@ received_cost) / (qty_on_hand + received_qty)`.
 Pick weighted average moving cost as the operational default, and carry standard cost
 as a _second, parallel_ figure per ingredient used only for recipe costing and variance.
 Moving average survives decanting, needs no layer bookkeeping, tolerates the out-of-
-order arrival that offline sync guarantees, and — the decisive point — is what Accurate
-is typically configured to use, so operational and financial valuation drift by rounding
-rather than by method. FIFO remains available per-item for high-value, genuinely lot-
-tracked goods (imported beef, wine), with batch and expiry tracked independently of the
+order arrival that offline sync guarantees, and — the decisive point — it can be matched
+to Accurate, which supports both average and FIFO. Confirming the costing method actually
+configured in the Accurate database is therefore an integration prerequisite, not a
+detail: where both sides use average, operational and financial valuation drift only by
+rounding and reconciliation can treat the difference as a tolerance. FIFO remains
+available per-item for high-value, genuinely lot-tracked goods (imported beef, wine), but
+a per-item method that differs from Accurate's produces method-based COGS and valuation
+differences rather than rounding-only ones, so those items need a layer-level cost
+comparison as their reconciliation rule rather than a tolerance — defined before
+inventory posting is enabled at all. Batch and expiry are tracked independently of the
 costing method for food-safety reasons regardless.
 
 **Theoretical versus actual.** Theoretical usage is the recipe explosion of everything
@@ -255,7 +265,9 @@ Verified facts about the integration surface, from Accurate's own documentation:
 2.0 with a registered client id/secret yielding a bearer access token; a two-step
 session model where `GET https://account.accurate.id/api/db-list.do` lists accessible
 databases and `GET https://account.accurate.id/api/open-db.do?id=<db>` returns a session
-id and a host; data calls then go to `https://<host>/accurate/api/<resource>/<action>.do`
+id and a host; the host is itself a full origin including the scheme (`https://public.accurate.id`
+for regular accounts, a per-tenant host on private cloud), so data calls go to
+`<host>/accurate/api/<resource>/<action>.do` with nothing prepended,
 carrying both `Authorization: Bearer <token>` and `X-Session-ID: <session>`; the host is
 explicitly documented as changeable and clients are told to follow HTTP 308 redirects;
 POST is the recommended method and nested collections are passed as indexed form
@@ -318,9 +330,20 @@ number the ACL itself deterministically generated) rather than resolved by a bli
 retry. Never retry a `save.do` on an ambiguous outcome without a read-back first — this
 is the single most likely source of duplicated revenue in the whole system.
 
+`revision` is not a licence to post the same day twice. A revision row persists the
+predecessor `PostingRequest` id and the Accurate object id it supersedes, and it resolves
+to exactly one of two shapes: an edit of the predecessor document where the period is
+still open and Accurate permits it, or a reversing document plus a corrected one where
+the period is closed or the document is locked. Which shape applies is a property of the
+document type and is recorded on the row, so reconciliation nets predecessor and
+successor together and a revision can never be counted as additional revenue.
+
 **Failure handling.** Postings run in the background job block with bounded exponential
 backoff and jitter. Non-retryable failures (validation, unmapped master data) go to a
-dead-letter queue with the full request, the response, and a repair action; an operator
+dead-letter queue as a redacted repair envelope — `Authorization` and `X-Session-ID`
+dropped entirely, customer and employee PII and payment references masked field by field,
+only the identifiers and error detail a repair actually needs retained — with a repair
+action, a bounded retention, and access limited to the finance-repair role. An operator
 UI lets finance fix the mapping and replay. Backfill is the same path with an explicit
 date range, and because keys are deterministic, replaying a month is safe. **If Accurate
 is down during trading hours, nothing happens** — that is the whole point of daily
@@ -370,9 +393,13 @@ orders arrive with masked customer contacts — do not de-mask or enrich them.
 
 Payment card data: never store a PAN, never log one, never let one reach the domain
 model. Tokenise at the terminal or gateway and persist only a token, last four, scheme,
-and processor reference. This is the whole of PCI scope reduction, and it is an
-architectural property, not a policy document — if a PAN cannot be represented in the
-schema, it cannot leak from it.
+and processor reference. That is an architectural property rather than a policy document
+— if a PAN cannot be represented in the schema, it cannot leak from it — but it is the
+first move in PCI scope reduction, not the whole of it. The boundary still has to be
+stated explicitly: where tokenisation or P2PE actually happens (terminal or gateway), how
+the components connected to it are segmented from the rest of the estate, which controls
+are the provider's responsibility under its own attestation and which remain the
+merchant's, and which of the remaining components a qualified assessor has to validate.
 
 The audit trail on voids, discounts, refunds, price overrides, and drawer no-sales is
 a fraud control before it is a compliance artefact. It must record the authorising
@@ -384,9 +411,12 @@ Staff data under UU 27/2022 (PDP) gets the same treatment as customer data: lawf
 basis recorded, retention scheduled, access controlled. Biometric clock-in, if used, is
 sensitive personal data and needs explicit consent plus a non-biometric alternative.
 
-Retention overrides erasure: an F&B business must keep transaction and financial records
-for the statutory period (ten years for company records under Indonesian commercial law;
-confirm the applicable period with counsel per entity). A customer erasure request
+Retention overrides erasure, but only for the records statute actually names. UU 8/1997
+Art. 11 applies its ten-year period to company accounting records — the books and the
+supporting financial-administration documents underlying them — measured from the end of
+the fiscal year rather than from the date of the individual transaction; it does not put
+every field the system happens to store under the same clock (confirm the scope and
+period with counsel per entity). A customer erasure request
 therefore anonymises the _customer_ dimension — name, phone, address, loyalty identity —
 while the transaction, its lines, and its tax figures survive as a de-identified fact.
 The retention block must express this as a per-field policy, not a per-record delete.

@@ -22,6 +22,7 @@ declared, not implemented.
 package schema
 
 import (
+	"entgo.io/contrib/entproto"
 	"entgo.io/ent"
 	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
@@ -42,13 +43,16 @@ func (MenuItem) Mixin() []ent.Mixin {
 
 func (MenuItem) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("name").MaxLen(120),
-		field.Int64("price_cents").Positive(),
-		field.String("currency").Default("IDR").Immutable(),
+		field.String("name").MaxLen(120).
+			Annotations(entproto.Field(2)),
+		field.Int64("price_cents").Positive().
+			Annotations(entproto.Field(3)),
+		field.String("currency").Default("IDR").Immutable().
+			Annotations(entproto.Field(4)),
 		field.Enum("state").
 			Values("draft", "active", "out_of_stock", "retired").
 			Default("draft").
-			Annotations(blocks.StateMachine{
+			Annotations(entproto.Field(5), blocks.StateMachine{
 				Initial: "draft",
 				Transitions: []blocks.Transition{
 					{Action: "activate", From: []string{"draft", "out_of_stock"}, To: "active"},
@@ -58,12 +62,15 @@ func (MenuItem) Fields() []ent.Field {
 			}),
 		field.String("supplier_contact").
 			Optional().
-			Annotations(blocks.PII("contact", blocks.LegalBasisContract, "P5Y")),
+			Annotations(entproto.Field(6),
+				blocks.PII("contact", blocks.LegalBasisContract, "P5Y")),
 	}
 }
 
 func (MenuItem) Annotations() []schema.Annotation {
 	return []schema.Annotation{
+		entproto.Message(),
+		entproto.Service(),
 		blocks.Resource{
 			Domain:      "catalog",
 			ProtoPackage: "blocks.catalog.v1",
@@ -173,17 +180,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	gqlEx, _ := entgql.NewExtension(entgql.WithSchemaPath("api/graphql/schema.graphql"))
-
-	err = entc.Generate("./ent/schema",
-		&gen.Config{Package: "github.com/acme/pos/ent", Features: gen.AllFeatures},
-		entc.Extensions(ex, gqlEx),
-		entc.TemplateDir("./templates"),
+	gqlEx, err := entgql.NewExtension(entgql.WithSchemaPath("api/graphql/schema.graphql"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	protoEx, err := entproto.NewExtension( // proto emission during codegen
+		entproto.WithProtoDir("api/protos"),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := entproto.Generate("./ent"); err != nil { // proto emission
+
+	err = entc.Generate("./ent/schema",
+		&gen.Config{Package: "github.com/acme/pos/ent", Features: gen.AllFeatures},
+		entc.Extensions(ex, gqlEx, protoEx),
+		entc.TemplateDir("./templates"),
+	)
+	if err != nil {
 		log.Fatal(err)
 	}
 }

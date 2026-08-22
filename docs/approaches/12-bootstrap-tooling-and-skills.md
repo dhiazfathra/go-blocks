@@ -33,25 +33,25 @@ One binary, `go install`-able, no plugin system, no config file required for the
 path. Every command is deterministic: same inputs, byte-identical outputs, so `verify`
 in CI is meaningful.
 
-| Command             | Purpose                                                                   | Output                                                                          |
-| ------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `new project`       | Scaffold a modular-monolith repo with one example module                  | Full repo tree, `go.mod`, Compose file, CI workflow, `AGENTS.md`, passing tests |
-| `new module`        | Add a bounded context to an existing project                              | `internal/modules/<name>/`, proto package, Ent schema dir, wire provider, tests |
-| `new resource`      | Declare a resource: proto message, Ent schema, CRUD actions, policies     | Proto + schema + service + policy + PII classification + table-driven tests     |
-| `new action`        | Add a named non-CRUD action (Ash-style) to a resource                     | Proto RPC, action handler, authorization hook, audit entry, state-machine edge  |
-| `generate`          | buf + entc + wire in one ordered pass                                     | All generated code under `gen/` and `ent/`; no partial states on failure        |
-| `migrate`           | Create/apply/verify schema migrations (Atlas-backed, no auto-DDL in prod) | Versioned SQL files, lint report, drift check against target DB                 |
-| `doctor`            | Verify toolchain: Go, buf, protoc plugins, Atlas, Docker, versions        | Pass/fail table with exact install commands for each failure                    |
-| `verify`            | Re-run `generate` into a temp dir, diff against committed output          | Exit 1 with a diff on drift; the CI gate against hand-edited generated code     |
-| `dev`               | Hot-reload server plus seeded local stack                                 | Running binary, watched rebuilds, printed URLs for API/UI/Jaeger                |
-| `seed`              | Apply deterministic fixture sets                                          | Seeded DB; fixed UUIDs and timestamps so assertions are stable                  |
-| `compliance report` | Emit the control-to-block mapping for this project's actual code          | Markdown + JSON: PII inventory, retention policies, unaudited actions           |
-| `introspect`        | Machine-readable manifest of resources, actions, args, policies           | JSON on stdout; the substrate for the MCP server and agent skills               |
-| `upgrade`           | Migrate a project across block versions via codemods                      | Applied AST rewrites, a report of manual TODOs, updated version pin             |
+| Command             | Purpose                                                                                 | Output                                                                                                      |
+| ------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `new project`       | Scaffold a modular-monolith repo with one example module                                | Full repo tree, `go.mod`, Compose file, CI workflow, `AGENTS.md`, passing tests                             |
+| `new module`        | Add a bounded context to an existing project                                            | `internal/modules/<name>/`, proto package, Ent schema dir, wire provider, tests                             |
+| `new resource`      | Declare a resource: proto message, Ent schema, CRUD actions, policies                   | Proto + schema + service + policy + PII classification + table-driven tests                                 |
+| `new action`        | Add a named non-CRUD action (Ash-style) to a resource                                   | Proto RPC, action handler, authorization hook, audit entry, state-machine edge                              |
+| `generate`          | buf + entc + wire in one ordered pass, at the pinned tool versions                      | All generated code — `gen/`, `ent/`, `internal/bootstrap/wire_gen.go`; no partial states on failure         |
+| `migrate`           | Create/apply/verify schema migrations (Atlas-backed, no auto-DDL in prod)               | Versioned SQL files, lint report, drift check against target DB                                             |
+| `doctor`            | Check the toolchain against the versions pinned in `configs/tools.yaml`                 | Pass/fail table with exact install commands for each mismatch or omission                                   |
+| `verify`            | Re-run `generate` at the pinned versions into a temp dir, diff against committed output | Exit 1 with a diff on drift across the full generated scope; the CI gate against hand-edited generated code |
+| `dev`               | Hot-reload server plus seeded local stack                                               | Running binary, watched rebuilds, printed URLs for API/UI/Jaeger                                            |
+| `seed`              | Apply deterministic fixture sets                                                        | Seeded DB; fixed UUIDs and timestamps so assertions are stable                                              |
+| `compliance report` | Emit the control-to-block mapping for this project's actual code                        | Markdown + JSON: PII inventory, retention policies, unaudited actions                                       |
+| `introspect`        | Machine-readable manifest of resources, actions, args, policies                         | JSON on stdout; the substrate for the MCP server and agent skills                                           |
+| `upgrade`           | Migrate a project across block versions via codemods                                    | Applied AST rewrites, a report of manual TODOs, updated version pin                                         |
 
 ### `blocksctl new project`
 
-```
+```console
 $ blocksctl new project fnb-erp --module github.com/dhiazfathra/fnb-erp \
     --blocks authn,authz,audit,tenancy,media,jobs \
     --data-layer postgres+sqlite
@@ -68,7 +68,7 @@ project ready in 38s
   blocksctl new module     add a bounded context
 ```
 
-```
+```text
 fnb-erp/
 ├── AGENTS.md
 ├── Makefile
@@ -76,7 +76,7 @@ fnb-erp/
 │   ├── buf.yaml
 │   └── example/v1/example.proto
 ├── cmd/server/main.go
-├── configs/{config.yaml,config.local.yaml}
+├── configs/{config.yaml,config.local.yaml,tools.yaml}   # tools.yaml pins buf/entc/wire/protoc plugin versions
 ├── deploy/compose.yaml
 ├── docs/adr/0001-record-architecture-decisions.md
 ├── gen/                      # generated: go, grpc, http, errors, validate, openapi, ts
@@ -94,7 +94,7 @@ fnb-erp/
 
 ### `blocksctl new resource`
 
-```
+```console
 $ blocksctl new resource MenuItem --module catalog \
     --field name:string:required --field price:money \
     --field allergens:[]string --field photo:media_ref \
@@ -120,9 +120,9 @@ locally, strict at the boundary.
 
 ### `blocksctl new action`
 
-```
+```console
 $ blocksctl new action ConfirmOrder --module order --resource Order \
-    --transition pending->confirmed --requires order:confirm --audited \
+    --transition 'pending->confirmed' --requires order:confirm --audited \
     --arg confirmed_by:actor_ref --arg note:string:optional
 api/order/v1/order.proto                    +1 rpc, +2 messages
 internal/modules/order/action_confirm.go    created  (business logic: TODO)
@@ -180,7 +180,7 @@ achievable goal.
 
 `blocksctl dev` is the only command a new engineer needs.
 
-```
+```console
 $ blocksctl dev
 sqlite mode (no docker) — use --stack full for postgres/redis/minio/otel
 migrations   applied 7                                       ok
@@ -189,7 +189,7 @@ serving      grpc :9000  http :8000  admin :8080
 watching     internal/ api/  (rebuild ~1.1s)
 ```
 
-```
+```console
 $ blocksctl dev --stack full
 docker  postgres:17  redis:7  minio  jaeger  (opensearch: --with-search)   4 up
 ...
@@ -228,7 +228,7 @@ means four artifacts, and one honest accounting of risk.
 
 **`AGENTS.md`, root and per module.** The root file carries what never changes: the
 layout, the invariants (generated code is never hand-edited; proto is the contract; no
-new dependencies without an ADR), the commands (`blocksctl generate`, `verify`, `test`),
+new dependencies without an ADR), the commands (`blocksctl generate`, `blocksctl verify`, `go test ./...`),
 and the escalation rule — if a change requires editing anything under `gen/`, stop and
 report. Per-module files carry the domain: the resources, the state machines, the
 invariants that are business rules rather than framework rules. Keep both short. An
@@ -279,8 +279,11 @@ that agent reads — a customer's order note, a review, a support email — is a
 instruction. Mitigations, all required together: the agent gets its own principal with
 its own permission set, never the caller's; only actions explicitly annotated
 `ai_exposed = true` are visible; every mutating action invoked via the agent surface is
-rate-limited, audited with the prompt hash, and gated on a human confirmation step for
-anything financial or destructive. Treat the tool surface as a public API exposed to an
+rate-limited, audited with the prompt hash, and gated on a human approval for
+anything financial or destructive. That approval is bound to the agent principal, the
+action, the target, and a hash of the canonicalized arguments, and it is single-use and
+expiring — a generic "a human clicked yes" is not a control, because the agent can change
+the payload after approval or replay one approval against another destructive request. Treat the tool surface as a public API exposed to an
 attacker who controls part of the input, because that is what it is.
 
 ## 6. Documentation as a deliverable
@@ -465,7 +468,7 @@ happened.
 
 | Metric                                          | Target             | Fail threshold | How measured                                              |
 | ----------------------------------------------- | ------------------ | -------------- | --------------------------------------------------------- |
-| `blocksctl new` to first passing test           | < 60 s             | > 3 min        | Timed CI job on a clean cache, every release              |
+| `blocksctl new project` to first passing test   | < 60 s             | > 3 min        | Timed CI job on a clean cache, every release              |
 | Hand-written lines per CRUD resource            | 0                  | > 20           | `blocksctl new resource` output, diff excluding generated |
 | Hand-written lines per audited state transition | ~15 (one function) | > 60           | Same, for `new action`                                    |
 | Time to add an audited state transition         | < 15 min           | > 1 h          | Recorded on real tasks, not a demo                        |

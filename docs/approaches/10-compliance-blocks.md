@@ -58,31 +58,31 @@ them.
 
 ## GDPR article mapping
 
-| Article     | Obligation                                                                                        | go-blocks component or generated artefact                                                                                                                                                     |
-| ----------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Art. 5      | Principles: lawfulness, purpose limitation, minimisation, accuracy, storage limitation, integrity | `blocks/pii` (minimisation via classification), `blocks/consent` (purpose binding), `blocks/retention` (storage limitation), `blocks/crypto` + `blocks/authz` (integrity/confidentiality)     |
-| Art. 6      | Lawful basis for processing                                                                       | `blocks/consent` records a `LegalBasis` per purpose; the resource action declares which basis it relies on and refuses to run without one                                                     |
-| Art. 7      | Conditions for consent, including withdrawal                                                      | `blocks/consent` — versioned policy text, timestamp, actor, evidence, `Withdraw` action as easy as `Grant`                                                                                    |
-| Arts. 12–14 | Transparency and information duties                                                               | Generated privacy-notice fragments from `blocks/pii` field annotations plus purpose registry; versioned policy text served by `blocks/consent`                                                |
-| Art. 15     | Right of access (DSAR)                                                                            | `blocks/dsar` `Export` — machine-assembled from PII annotations across all resources                                                                                                          |
-| Art. 16     | Rectification                                                                                     | `blocks/dsar` `Rectify` mapped onto resource update actions with an audit entry                                                                                                               |
-| Art. 17     | Erasure                                                                                           | `blocks/dsar` `Erase` with per-resource strategy (hard delete, anonymise, crypto-shred); see "Erasure is the hard part"                                                                       |
-| Art. 18     | Restriction of processing                                                                         | `blocks/dsar` restriction flag enforced as an `blocks/authz` predicate that blocks non-storage processing                                                                                     |
-| Art. 20     | Data portability                                                                                  | `blocks/dsar` structured export (JSON, and CSV per resource) derived from proto schemas                                                                                                       |
-| Art. 21     | Objection                                                                                         | `blocks/consent` objection record; marketing and profiling purposes check it before use                                                                                                       |
-| Art. 25     | Data protection by design and by default                                                          | The framework's defaults: deny-by-default authz, encryption on `sensitive` fields, redacted logs, retention required per resource, CI gate on unclassified fields                             |
-| Art. 30     | Records of processing activities                                                                  | Generated RoPA from PII annotations, purpose registry, retention policies, and declared processors                                                                                            |
-| Art. 32     | Security of processing                                                                            | `blocks/crypto`, `blocks/authz`, `blocks/audit`, `blocks/observability`, plus the Annex A table above                                                                                         |
-| Arts. 33–34 | Breach notification (72 h to the authority)                                                       | `blocks/audit` anomaly detection and an incident workflow in `blocks/workflow` that computes affected subjects from PII inventory and drafts notifications                                    |
-| Art. 35     | DPIA                                                                                              | Framework supplies inputs only: data-flow inventory, PII categories, processor list. The assessment itself is human work                                                                      |
-| Arts. 44–49 | International transfers                                                                           | Processor registry records each destination, mechanism (SCCs, adequacy), and data categories; `blocks/pii` can pin a residency tag per field and refuse egress to a non-permitted destination |
+| Article     | Obligation                                                                                        | go-blocks component or generated artefact                                                                                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Art. 5      | Principles: lawfulness, purpose limitation, minimisation, accuracy, storage limitation, integrity | `blocks/pii` (minimisation via classification), `blocks/consent` (purpose binding), `blocks/retention` (storage limitation), `blocks/crypto` + `blocks/authz` (integrity/confidentiality)               |
+| Art. 6      | Lawful basis for processing                                                                       | `blocks/basis` — a processing-basis registry per (resource, purpose); the action declares its basis and the evaluator checks that basis. `blocks/consent` is consulted only when the basis _is_ consent |
+| Art. 7      | Conditions for consent, including withdrawal                                                      | `blocks/consent` — versioned policy text, timestamp, actor, evidence, `Withdraw` action as easy as `Grant`                                                                                              |
+| Arts. 12–14 | Transparency and information duties                                                               | Generated privacy-notice fragments from `blocks/pii` field annotations plus purpose registry; versioned policy text served by `blocks/consent`                                                          |
+| Art. 15     | Right of access (DSAR)                                                                            | `blocks/dsar` `AccessBundle` — machine-assembled from PII annotations across all resources the subject appears in                                                                                       |
+| Art. 16     | Rectification                                                                                     | `blocks/dsar` `Rectify` mapped onto resource update actions with an audit entry                                                                                                                         |
+| Art. 17     | Erasure                                                                                           | `blocks/dsar` `Erase` with per-resource strategy (hard delete, anonymise, crypto-shred); see "Erasure is the hard part"                                                                                 |
+| Art. 18     | Restriction of processing                                                                         | `blocks/dsar` restriction flag enforced as an `blocks/authz` predicate that blocks non-storage processing                                                                                               |
+| Art. 20     | Data portability                                                                                  | `blocks/dsar` `PortabilityBundle` — the narrower subset: subject-provided fields whose basis is consent or contract, in a structured format (JSON, plus CSV per resource) derived from proto schemas    |
+| Art. 21     | Objection                                                                                         | `blocks/consent` objection record; marketing and profiling purposes check it before use                                                                                                                 |
+| Art. 25     | Data protection by design and by default                                                          | The framework's defaults: deny-by-default authz, encryption on `sensitive` fields, redacted logs, retention required per resource, CI gate on unclassified fields                                       |
+| Art. 30     | Records of processing activities                                                                  | Generated RoPA from PII annotations, purpose registry, retention policies, and declared processors                                                                                                      |
+| Art. 32     | Security of processing                                                                            | `blocks/crypto`, `blocks/authz`, `blocks/audit`, `blocks/observability`, plus the Annex A table above                                                                                                   |
+| Arts. 33–34 | Breach notification (72 h to the authority)                                                       | `blocks/audit` anomaly detection and an incident workflow in `blocks/workflow` that computes affected subjects from PII inventory and drafts notifications                                              |
+| Art. 35     | DPIA                                                                                              | Framework supplies inputs only: data-flow inventory, PII categories, processor list. The assessment itself is human work                                                                                |
+| Arts. 44–49 | International transfers                                                                           | Processor registry records each destination, mechanism (SCCs, adequacy), and data categories; `blocks/pii` can pin a residency tag per field and refuse egress to a non-permitted destination           |
 
 ## Indonesian PDP Law (UU 27/2022) mapping
 
 | Obligation                                                                                                                                                                                      | Statutory anchor                 | go-blocks component                                                                                                                                                                         |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Data subject rights: information, access, correction, deletion, withdrawal of consent, objection to automated decision-making, portability, redress                                             | Arts. 5–13                       | `blocks/dsar` (access, rectify, erase, export), `blocks/consent` (withdrawal, objection), automated-decision registry in `blocks/authz` policy metadata                                     |
-| Lawful bases for processing (consent, contract, legal obligation, vital interests, public interest, legitimate interests)                                                                       | Ch. V                            | `blocks/consent` `LegalBasis` enum; every action declares its basis                                                                                                                         |
+| Lawful bases for processing (consent, contract, legal obligation, vital interests, public interest, legitimate interests)                                                                       | Ch. V                            | `blocks/basis` registry; every action declares its basis. Only the consent basis routes to `blocks/consent`                                                                                 |
 | Distinction between general and specific (sensitive) personal data                                                                                                                              | Art. 4                           | `blocks/pii` categories: health, biometrics, genetics, sexual life, political views, criminal records, children's data, personal finance                                                    |
 | Controller and processor duties, processing agreements                                                                                                                                          | Ch. V                            | Processor registry; `blocks/audit` records processor handoffs                                                                                                                               |
 | DPO appointment for large-scale or sensitive processing                                                                                                                                         | Art. 53                          | Not a framework capability. The framework records who the DPO is and routes DSAR queues to them                                                                                             |
@@ -146,20 +146,58 @@ type Entry struct {
     Metadata  json.RawMessage // PII-redacted diff
     At        time.Time
     PrevHash  []byte
-    Hash      []byte // H(PrevHash || canonical(entry))
+    Hash      []byte // H(PrevHash || canonical(entry)); canonical() excludes Hash
 }
 
 type Log interface {
-    Append(ctx context.Context, e Entry) error
+    // Append allocates Seq and PrevHash inside a transaction that serialises
+    // on the tenant's chain tail; callers leave Seq, PrevHash, and Hash unset.
+    Append(ctx context.Context, e Entry) (Entry, error)
     Verify(ctx context.Context, tenant uuid.UUID, from, to uint64) (Report, error)
 }
 ```
+
+`canonical(entry)` serialises every field _except_ `Hash`, otherwise the hash
+definition is self-referential. Concurrent appends must not race for the tail: the
+append transaction takes the per-tenant chain lock (`SELECT … FOR UPDATE` on the
+tenant's chain head row), and a unique constraint on `(TenantID, Seq)` makes a lost
+race a write failure rather than a forked chain.
 
 Enforcement point: a Kratos middleware after authorization, plus an Ent hook so
 data mutations cannot bypass the transport layer. Metadata passes through
 `blocks/pii` redaction before write. Retention is independent of, and usually
 longer than, the retention of the records it describes — audit entries reference
 subjects by pseudonymous ID so the log survives erasure of the subject.
+
+### `blocks/basis`
+
+Lawful basis is not consent. Article 6 lists six bases and consent is one of them,
+so the basis decision has to live outside `blocks/consent` — otherwise payroll and
+tax processing, whose basis is legal obligation, breaks the moment a subject has no
+consent record, and a withdrawal switches off processing it never governed.
+
+```go
+type Basis uint8 // Consent, Contract, LegalObligation, VitalInterests, PublicTask, LegitimateInterests
+
+type Registration struct {
+    Resource string
+    Purpose  string // registry key, shared with blocks/consent
+    Basis    Basis
+    Note     string // statute for LegalObligation, LIA reference for LegitimateInterests
+}
+
+type Evaluator interface {
+    Register(Registration) error
+    // Allowed resolves the declared basis for (resource, purpose) and evaluates it.
+    // Only Basis == Consent consults blocks/consent; every other basis is satisfied
+    // by its registration, so an absent consent record is irrelevant to it.
+    Allowed(ctx context.Context, subject, resource, purpose string) (Decision, error)
+}
+```
+
+Every (resource, purpose) pair must be registered; an unregistered pair is a build
+failure. `LegitimateInterests` additionally requires a balancing-test reference in
+`Note` — the framework stores the pointer, a human does the assessment.
 
 ### `blocks/consent`
 
@@ -185,10 +223,18 @@ type Store interface {
 }
 ```
 
-Records are never updated in place; withdrawal appends. Enforcement point: an
-action declares `purpose` in its proto options, and the action runtime calls
-`Check` before executing. A missing purpose declaration is a build failure, not a
-runtime default.
+Consent records, and nothing else. Records are never updated in place; withdrawal
+appends. Enforcement point: an action declares `purpose` in its proto options and the
+runtime calls `blocks/basis` `Allowed` before executing; that call reaches `Check`
+only for purposes registered with `Basis == Consent`. A missing purpose declaration
+is a build failure, not a runtime default.
+
+`Withdraw` therefore stops processing for consent-based purposes only. Withdrawing
+marketing consent must not disable payroll or tax processing whose registered basis
+is legal obligation, and it does not — the two purposes are separate registry
+entries. A controller cannot rescue a failed consent by silently re-basing the same
+purpose onto legitimate interests: changing a registration is an auditable change,
+recorded through `blocks/audit`.
 
 ### `blocks/pii`
 
@@ -234,30 +280,41 @@ type Policy struct {
 type Hold struct {
     Resource, ResID, Reason string
     RequestedBy             string
-    Until                   *time.Time
+    Until                   *time.Time // nil = open-ended
+    ReviewAt                *time.Time // mandatory when Until is nil
 }
 ```
 
 Every resource must declare a policy; an unregistered resource fails the build.
 A scheduled job in `blocks/jobs` sweeps expired records per policy, writing one
 audit entry per batch. Legal holds override expiry and are themselves auditable —
-a hold with no expiry and no review date is a finding, not a feature.
+a hold with neither `Until` nor `ReviewAt` fails validation, and an open-ended hold
+whose `ReviewAt` has passed is a finding, not a feature.
 
 ### `blocks/dsar`
 
 ```go
 type Service interface {
-    Export(ctx context.Context, subject string, f Format) (Bundle, error)
+    Access(ctx context.Context, subject string, f Format) (AccessBundle, error)
+    Portability(ctx context.Context, subject string, f Format) (PortabilityBundle, error)
     Rectify(ctx context.Context, subject string, patch Patch) error
     Erase(ctx context.Context, subject string, scope Scope) (Result, error)
     Restrict(ctx context.Context, subject string, on bool) error
 }
 ```
 
-`Export` walks the PII field inventory, so a new annotated field appears in exports
-without new code. Portability format: JSON as the canonical structured output, with
-a per-resource CSV rendering for readability; both include a manifest of resources,
-purposes, and legal bases.
+Access and portability are different rights and must not share one bundle. Both walk
+the PII field inventory, so a new annotated field appears without new code, and both
+render as JSON with a per-resource CSV alongside for readability, carrying a manifest
+of resources, purposes, and legal bases. The inclusion rules differ:
+
+- **`Access`** (Art. 15) covers every resource holding the subject's personal data,
+  including data the controller derived or observed, subject to the usual limits on
+  disclosing other people's data.
+- **`Portability`** (Art. 20) is narrower: only data the subject provided, only where
+  the processing basis for that field is consent or contract, and only what is
+  processed by automated means. Derived scores, internal annotations, and
+  legal-obligation records (payroll, tax) are excluded — the manifest states why.
 
 Erasure needs a referential-integrity strategy per resource, declared alongside the
 retention policy. Three options, in order of preference: **anonymise in place**
@@ -277,13 +334,23 @@ type Keyring interface {
 }
 ```
 
-Envelope encryption: a KMS-held root key wraps per-tenant keys, which wrap
-per-subject data keys. Field-level encryption is applied by an Ent value
-transformer driven by the `Encrypt` flag in `blocks/pii`, so no business code calls
-crypto directly. Rotation re-wraps rather than re-encrypts payloads where possible.
-`Destroy` is the crypto-shredding path: it makes a subject's ciphertext
-unrecoverable everywhere at once, including in backups — which is precisely why it
-is the most useful erasure primitive available.
+Envelope encryption, three layers: a KMS-held root key wraps per-tenant keys, which
+wrap per-subject data keys. The per-subject layer is the authoritative hierarchy and
+the reason crypto-shredding works at all — a per-tenant DEK alone cannot destroy one
+subject's ciphertext without destroying the tenant's. Where another document's block
+catalogue summarises `blocks/crypto` as "per-tenant DEK", read this contract as the
+normative one. Field-level encryption is applied by an Ent value transformer driven
+by the `Encrypt` flag in `blocks/pii`, so no business code calls crypto directly.
+Rotation re-wraps rather than re-encrypts payloads where possible.
+
+`Destroy` is the crypto-shredding path, and its guarantee is bounded to exactly what
+the destroyed key protects: every copy of ciphertext encrypted under that subject's
+data key becomes unrecoverable at once, backups included, without touching the
+backup. It does nothing for plaintext copies, for fields not marked `Encrypt`, for
+data re-encrypted under a different key, for anything exported to a system outside
+the keyring, or for key material an operator escrowed elsewhere. Within that
+boundary it is the most useful erasure primitive available; the boundary is the
+part that has to be inventoried.
 
 ### `blocks/authz`
 
@@ -322,11 +389,19 @@ restriction. Default deny. A resource with no policy is unreachable.
 **Recommendation: shared schema with a tenant predicate enforced in the data
 layer**, with schema-per-tenant available as a per-tenant escalation for customers
 with contractual isolation requirements. Reasoning: the predicate approach's only
-real weakness is developer error, and that weakness is removable — the predicate is
-injected by an Ent privacy policy that no query can opt out of, and a test harness
-asserts cross-tenant queries return empty for every resource. Paying
-database-per-tenant operational cost to defend against a bug you can make
-structurally impossible is the wrong trade for a modular monolith serving F&B SMEs.
+real weakness is developer error, and that weakness is largely removable — the
+predicate is injected by an Ent privacy policy that no Ent query can opt out of, and
+a test harness asserts cross-tenant queries return empty for every resource.
+
+The guarantee is bounded, and stating it as absolute would be a lie: any path that
+does not go through the Ent client is outside the policy. That means raw SQL and
+migrations, reporting and analytics queries, DSAR and RoPA exports, background jobs
+that resolve their own tenant, and administrative or support tooling running with a
+privileged credential. Each of those paths needs its own explicit tenant check and
+its own cross-tenant test asserting empty results; a path that cannot state which
+tenant it is scoped to does not ship. Paying database-per-tenant operational cost to
+defend against a residual bug class this narrow is the wrong trade for a modular
+monolith serving F&B SMEs.
 Database-per-tenant remains the answer for a tenant that requires separate backup
 and key custody, and the isolation model must be a configuration decision, not a
 rewrite.
