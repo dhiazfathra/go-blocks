@@ -5,9 +5,9 @@ set -uo pipefail
 fail=0
 step() { printf '\n== %s\n' "$1"; }
 
-step "1. Files present (10 expected)"
-ls docs/approaches/*.md | tee /dev/stderr | wc -l | xargs -I{} test {} -eq 10 &&
-	echo "OK: 10 documents" || {
+step "1. Files present (11 expected)"
+ls docs/approaches/*.md | tee /dev/stderr | wc -l | xargs -I{} test {} -eq 11 &&
+	echo "OK: 11 documents" || {
 	echo "FAIL: wrong file count"
 	fail=1
 }

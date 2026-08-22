@@ -48,6 +48,13 @@ choice between approaches stops being a one-way door.
 | 4   | Ent Schema-First        | Don't invent a DSL — adopt Ent's mature schema-as-Go-code and extend it with `entc` extensions.                | [`04`](04-approach-ent-schema-first.md)        |
 | 5   | Staged Hybrid           | Sequence the other four so each stage is independently useful even if the next is never built.                 | [`05`](05-approach-hybrid-staged.md)           |
 
+And one case study of a system that already exists, used to check the five proposals against
+something shipped rather than reasoned:
+
+| #   | Case study     | Thesis                                                                                                               | Deep dive                             |
+| --- | -------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| 6   | tx7do / GoWind | What Approach 2's generation half plus Approach 4's data layer actually look like in production, and where it stops. | [`06`](06-case-study-tx7do-gowind.md) |
+
 Supporting references, shared by all five:
 
 | File                                                                       | Contents                                                                                                                                                     |

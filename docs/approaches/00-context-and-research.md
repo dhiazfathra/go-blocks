@@ -178,6 +178,7 @@ consequences for go-blocks:
 | `03-approach-runtime-resource-engine.md` | Approach 3 — Ash-style runtime resource engine               |
 | `04-approach-ent-schema-first.md`        | Approach 4 — Ent schema as the single DSL                    |
 | `05-approach-hybrid-staged.md`           | Approach 5 — staged hybrid (recommended)                     |
+| `06-case-study-tx7do-gowind.md`          | Case study 6 — what tx7do actually shipped for GoWind        |
 | `10-compliance-blocks.md`                | ISO 27001 / GDPR / PDP control-to-block mapping              |
 | `11-fnb-mini-erp-and-accurate.md`        | F&B mini-ERP domain model and Accurate integration           |
 | `12-bootstrap-tooling-and-skills.md`     | CLI, generators, skills, CMS and Shop clone plans            |
