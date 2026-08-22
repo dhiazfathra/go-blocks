@@ -19,7 +19,7 @@ registry (Approach 3) as later purchases gated on measured evidence, not as
 architecture decided today.
 
 The reasoning is uncomfortable but simple: Approaches 2, 3, and 4 all describe
-destinations that are defensible, but each spends between 30 and 59 engineer-weeks on
+destinations that are defensible, but each spends between 22 and 59 engineer-weeks on
 framework machinery before the first business feature ships. That range is measured from
 an empty repository: ~30 for Approach 4, ~22–59 for Approach 3, and ~56 for Approach 2
 (its ~16 engineer-weeks of MVP plugins sit on top of Approach 1's ~40-week blueprint,

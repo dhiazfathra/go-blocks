@@ -152,7 +152,13 @@ type Entry struct {
 type Log interface {
     // Append allocates Seq and PrevHash inside a transaction that serialises
     // on the tenant's chain tail; callers leave Seq, PrevHash, and Hash unset.
-    Append(ctx context.Context, e Entry) (Entry, error)
+    //
+    // Append is idempotent on (TenantID, ID): the caller sets Entry.ID, and a
+    // retry with an ID already present returns the stored entry unchanged
+    // (with appended=false) instead of allocating a second Seq. Without this,
+    // a caller that times out after commit and retries forks one action into
+    // two chain positions, and Verify cannot tell that from a real duplicate.
+    Append(ctx context.Context, e Entry) (stored Entry, appended bool, err error)
     Verify(ctx context.Context, tenant uuid.UUID, from, to uint64) (Report, error)
 }
 ```
@@ -162,6 +168,13 @@ definition is self-referential. Concurrent appends must not race for the tail: t
 append transaction takes the per-tenant chain lock (`SELECT … FOR UPDATE` on the
 tenant's chain head row), and a unique constraint on `(TenantID, Seq)` makes a lost
 race a write failure rather than a forked chain.
+
+Idempotency needs its own constraint, not just the `Seq` one: a unique index on
+`(TenantID, ID)` is what lets `Append` recognise a retry. The caller therefore owns
+`Entry.ID` and must derive it deterministically from the action it is recording — a
+freshly generated UUID per attempt defeats the whole mechanism. In practice that
+means reusing the request or outbox record's identifier, which is also what makes
+audit replay after a crash safe.
 
 Enforcement point: a Kratos middleware after authorization, plus an Ent hook so
 data mutations cannot bypass the transport layer. Metadata passes through
@@ -328,14 +341,22 @@ notes crypto-shred.
 
 ```go
 type Keyring interface {
-    DataKey(ctx context.Context, subject string) (DataKey, error) // envelope
+    // tenant is explicit, never inferred: the wrapping key is per-tenant, so a
+    // subject identifier alone does not name a key. Passing it makes the tenant
+    // check part of the call rather than an ambient assumption, and stops one
+    // tenant's Destroy from reaching another tenant's subject on an ID collision.
+    DataKey(ctx context.Context, tenant, subject string) (DataKey, error) // envelope
     Rotate(ctx context.Context, keyID string) error
-    Destroy(ctx context.Context, subject string) error // crypto-shred
+    Destroy(ctx context.Context, tenant, subject string) error // crypto-erase
 }
 ```
 
 Envelope encryption, three layers: a KMS-held root key wraps per-tenant keys, which
-wrap per-subject data keys. The per-subject layer is the authoritative hierarchy and
+wrap per-subject data keys. `(tenant, subject)` is the key identity — the pair is
+unique by construction, so no global-uniqueness invariant on `subject` alone is
+required or assumed. `Destroy` resolves the tenant's wrapping key first and fails if
+the subject is not bound to that tenant, so a cross-tenant destroy is an error rather
+than a silent no-op or, worse, a successful destruction of the wrong subject's key. The per-subject layer is the authoritative hierarchy and
 the reason crypto-shredding works at all — a per-tenant DEK alone cannot destroy one
 subject's ciphertext without destroying the tenant's. Where another document's block
 catalogue summarises `blocks/crypto` as "per-tenant DEK", read this contract as the

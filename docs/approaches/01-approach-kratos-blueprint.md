@@ -215,13 +215,15 @@ client for the admin UI.
 package biz
 
 type PriceChangeUC struct {
-	repo     PriceChangeRepo
-	items    ItemRepo
-	authz    authz.Checker
-	audit    audit.Recorder
-	sm       *statemachine.Machine[PriceChangeState, PriceChangeEvent]
-	events   events.Publisher
-	thresh   money.Amount
+	repo   PriceChangeRepo
+	items  ItemRepo
+	authz  authz.Checker
+	audit  audit.Recorder
+	pii    pii.Classifier // supplies the classification audit.Redact requires
+	clock  clock.Clock    // injected so Event.At is deterministic under test
+	sm     *statemachine.Machine[PriceChangeState, PriceChangeEvent]
+	events events.Publisher
+	thresh money.Amount
 }
 
 func (uc *PriceChangeUC) Propose(ctx context.Context, in ProposeInput) (*PriceChange, error) {
@@ -262,9 +264,27 @@ func (uc *PriceChangeUC) Propose(ctx context.Context, in ProposeInput) (*PriceCh
 		}
 		// Audit is written inside the same transaction: no commit without its
 		// record, and a recorder failure rolls the price change back.
+		//
+		// Payloads go through audit.Redact, the block's only Payload constructor:
+		// Record fails closed on a raw or unclassified value, so a hand-built
+		// struct literal would be rejected even if it compiled.
+		before, err := audit.Redact(uc.pii, "menu.MenuItem", item)
+		if err != nil {
+			return err
+		}
+		after, err := audit.Redact(uc.pii, "menu.PriceChange", pc)
+		if err != nil {
+			return err
+		}
+		actor := ctxkit.Actor(ctx)
 		if err := uc.audit.Record(data.WithTx(ctx, tx), audit.Event{
-			Action: "menu.price_change.propose", Resource: item.ID,
-			Before: item.Price.String(), After: in.NewPrice.String(), Reason: in.Reason,
+			Actor: actor, TenantID: actor.TenantID,
+			Action: "menu.price_change.propose",
+			Resource: "menu.MenuItem", Entity: item.ID,
+			Outcome: audit.Allowed, Reason: in.Reason,
+			Channel: ctxkit.Channel(ctx), RequestID: ctxkit.RequestID(ctx),
+			At:     uc.clock.Now(),
+			Before: before, After: after,
 		}); err != nil {
 			return err
 		}

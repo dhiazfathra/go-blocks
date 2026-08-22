@@ -82,8 +82,18 @@ expensive mistake in Indonesian POS software. Service charge is separate again �
 revenue, commonly 5%, and when billed to the consumer it forms part of the PBJT base
 while staying a distinct amount from the PBJT charge itself. `TaxRule`, `PBJTRate`, and
 `ServiceChargeRule` are therefore versioned and scoped to the outlet's jurisdiction, and
-every order snapshots the `tax_profile_id` and the rule versions it was priced under, so
-a historical order can always be recomputed on its original basis.
+every order snapshots the `tax_profile_id` and the rule versions it was priced under.
+
+A version pointer is not enough on its own: if a rule row can be edited or deleted in
+place, the pointer dangles and the historical order becomes unrecomputable — which is
+exactly the situation a tax audit walks into. So the order stores an **immutable,
+effective-dated snapshot of the resolved inputs**, not just the identifiers: the applied
+PBJT rate, the service-charge rate, which components are inside the PBJT base, the
+jurisdiction the rate came from, the effective date the resolution used, and a content
+hash over that set. Rule rows themselves are append-only — a "change" writes a new
+effective-dated version and never mutates a prior one — and reconciliation compares the
+recomputed figure against the stored hash, so a silent rule edit shows up as a mismatch
+instead of quietly rewriting history.
 
 **`accounting`** is deliberately a module and not a library. It holds the
 anti-corruption layer, the posting state machine, and the reconciliation runs. Nothing
@@ -163,6 +173,29 @@ instant menu-engineering answers, but drifts hard against volatile fresh produce
 is most of an Indonesian kitchen's spend. **Weighted average moving cost** recomputes
 unit cost on every receipt: `new_cost = (qty_on_hand * old_cost + received_qty *
 received_cost) / (qty_on_hand + received_qty)`.
+
+That formula has an undefined case that offline POS guarantees will happen, so the rules
+have to be written down before any posting is enabled:
+
+- **Zero or negative denominator.** An offline sale can drive `qty_on_hand` to zero or
+  below before its receipt syncs, making the divisor zero or negative. Define the
+  behaviour explicitly: hold `old_cost` unchanged when the denominator is `<= 0`, book
+  the receipt at its own `received_cost`, and raise a negative-stock exception for
+  operational correction rather than silently producing a nonsense or negative unit cost.
+- **Negative stock as a first-class state.** Oversell is normal in F&B (the kitchen
+  serves, the count catches up), so negative on-hand is a recorded state with its own
+  variance report, not an error that blocks the sale.
+- **Backdated receipts and arrival order.** Moving average is order-dependent: a receipt
+  that syncs late produces a different running cost than if it had arrived on time. Fix
+  the rule as "cost is computed in sync-arrival order, and a backdated receipt triggers a
+  dated revaluation entry rather than a retroactive rewrite of already-posted COGS" —
+  otherwise every late sync silently restates closed periods.
+- **Revaluation.** Those revaluation entries are their own posting type with their own
+  Accurate mapping, dated to the period they are recognised in, never to the original
+  receipt's period if that period is closed.
+
+Only with those four defined does the "difference is rounding-only" claim below hold;
+without them the difference is method-based and unbounded.
 
 Pick weighted average moving cost as the operational default, and carry standard cost
 as a _second, parallel_ figure per ingredient used only for recipe costing and variance.
@@ -278,7 +311,19 @@ documented. An OpenAPI schema is published at
 
 Design consequences. The ACL is a single Go package exposing intent-shaped methods
 (`PostDailySales`, `PostGoodsReceipt`) and nothing else; the indexed-form-parameter
-encoding, the session lifecycle, and the 308 handling are all private to it. Session
+encoding, the session lifecycle, and the 308 handling are all private to it.
+
+**Redirect following is a credential-forwarding decision, not a transport detail.**
+Requests carry two secrets — `Authorization: Bearer` and `X-Session-ID` — and Go's
+default client strips `Authorization` when a redirect crosses to an unrelated host but
+forwards custom headers like `X-Session-ID` regardless. A hand-written `CheckRedirect`
+that "just follows 308s" therefore leaks the session id to whatever host the `Location`
+header names. The ACL installs an explicit `CheckRedirect` that follows a redirect only
+when the target is HTTPS and its host matches either the host returned by `open-db.do`
+for this tenant or an explicit Accurate host allowlist; anything else is a hard error, not
+a followed hop. Both credentials are re-attached deliberately per allowed hop rather than
+inherited, so the forwarding rule is stated in one place instead of falling out of
+library defaults. Session
 acquisition is a supervised singleton per tenant database with re-open on 401/session
 expiry and a host value that is re-read rather than cached to disk. Rate limiting is
 client-side and explicit: a token bucket at 6/s against a documented 8/s, plus a
@@ -335,16 +380,35 @@ predecessor `PostingRequest` id and the Accurate object id it supersedes, and it
 to exactly one of two shapes: an edit of the predecessor document where the period is
 still open and Accurate permits it, or a reversing document plus a corrected one where
 the period is closed or the document is locked. Which shape applies is a property of the
-document type and is recorded on the row, so reconciliation nets predecessor and
-successor together and a revision can never be counted as additional revenue.
+document type and is recorded on the row.
+
+The reversing shape creates **two** Accurate documents, so one object-id column cannot
+represent it. A revision row therefore carries a distinct child posting attempt per
+document it creates — each with its own Accurate object id, document type
+(`reversal` or `correction`), and terminal state — and the parent row is only
+`settled` once every child has reached a terminal state. The state transitions are
+explicit: `pending → reversal_posted → correction_posted → settled`, with a stall at
+`reversal_posted` being an alertable condition rather than a silently half-applied
+correction. Reconciliation nets the whole family — predecessor plus reversal plus
+correction — against the period, which is the only way it can prove the pair actually
+cancels the predecessor rather than assuming it did.
 
 **Failure handling.** Postings run in the background job block with bounded exponential
 backoff and jitter. Non-retryable failures (validation, unmapped master data) go to a
 dead-letter queue as a redacted repair envelope — `Authorization` and `X-Session-ID`
 dropped entirely, customer and employee PII and payment references masked field by field,
 only the identifiers and error detail a repair actually needs retained — with a repair
-action, a bounded retention, and access limited to the finance-repair role. An operator
-UI lets finance fix the mapping and replay. Backfill is the same path with an explicit
+action, a bounded retention, and access limited to the finance-repair role.
+
+Redacted-only is not replayable, though, and replay is the whole point of the queue. The
+envelope therefore also pins **what to rebuild the request from**, rather than storing the
+request itself: the immutable outbox record id the posting was derived from, the payload
+builder version, and a content hash of the request that failed. Replay re-derives the
+request from that outbox record through the same builder version and refuses to proceed if
+the recomputed hash does not match the stored one — which catches a rule or mapping change
+between failure and repair instead of silently posting a different document. The outbox
+record is the source of truth for replay and month-end backfill alike; the dead-letter
+envelope is diagnosis plus a pointer, never a second copy of the payload. Backfill is the same path with an explicit
 date range, and because keys are deterministic, replaying a month is safe. **If Accurate
 is down during trading hours, nothing happens** — that is the whole point of daily
 summary posting plus outbox. Selling never touches Accurate. The alert threshold is a

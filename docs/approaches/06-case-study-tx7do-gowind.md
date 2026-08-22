@@ -1,11 +1,47 @@
-# Case Study 6 — tx7do's GoWind: Proven, Working Approach
+# Case Study 6 — tx7do's GoWind: A Publicly Shipped Reference Implementation
 
 Unlike Approaches 1–5, this is not a proposal. It documents what tx7do (author of
-`go-wind-cms`, `go-wind-admin`, `go-wind-shop`) actually shipped, why he made each call, and
-what broke along the way. Sources: [gowind.cloud](https://www.gowind.cloud/) and
-[tx7do.github.io/article](https://tx7do.github.io/article/) — 16 technical posts read in full;
-non-technical pages skipped (list at the end). Chinese quotes are paraphrase-translated; read
-the originals before citing them externally.
+`go-wind-cms`, `go-wind-admin`, `go-wind-shop`) has publicly shipped, why he says he made each
+call, and what he reports broke along the way.
+
+**Evidence status — read this before citing anything below.** Every claim here is
+_self-reported_ by the author on his own site, corroborated only by public repositories, public
+demo deployments, and commit hashes he cites himself. No production start date, operational
+metric, uptime figure, tenant count, or independently measured scale is disclosed anywhere in
+the corpus. Treat this as a publicly shipped reference implementation with a visible commit
+history — not as an independently verified production system. Chinese quotes are
+paraphrase-translated; read the originals before citing them externally.
+
+### Source manifest
+
+Retrieved 2026-08-22. Posts live at `https://tx7do.github.io/posts/<slug>.html`; the index is
+[tx7do.github.io/article](https://tx7do.github.io/article/) and the product site is
+[gowind.cloud](https://www.gowind.cloud/).
+
+| Slug                                              | Used for                                           |
+| ------------------------------------------------- | -------------------------------------------------- |
+| `architecture-evolution-core-cms-shop`            | monolith-to-split retrospective (§1)               |
+| `gowind-cms-core-bff-architecture`                | dual-BFF rationale, proto isolation (§2)           |
+| `go-wind-shop-architecture-deep-dive`             | request path, Wire, layer omission (§2, §3)        |
+| `go-wind-shop-overview-and-positioning`           | positioning, six artefact classes (§7)             |
+| `go-wind-shop-security-and-production-readiness`  | security posture, admitted gaps (§6)               |
+| `kratos_monolith_architecture`                    | Kratos-for-monolith argument, buf/Ent/Wire choices |
+| `go-wind-cms-microservice-why-choose-kratos`      | framework selection criteria (§5)                  |
+| `go_wind_admin_layer_desigin`                     | the three coexisting layering patterns (§4)        |
+| `go_wind_admin_backend_project_struct`            | repository layout                                  |
+| `go_wind_admin_code_gen`                          | `sql2orm` / `sql2proto` / `sql2kratos` (§7)        |
+| `go-wind-toolkit-backend-full-code-generation`    | scaffold inputs and limits (§7)                    |
+| `go_wind_admin_redact`                            | `protoc-gen-redact` annotations (§7)               |
+| `go_wind_data_permission`                         | row/column data-scope design                       |
+| `go_wind_api_aggregator`                          | BFF aggregation helpers                            |
+| `kratos_api_design_guide`                         | proto/API conventions                              |
+| `gowind-unified-paradigm-standardized-admin-api`  | frontend API layering                              |
+| `go-wind-ai-development-framework-scaffold-value` | AI-friendliness argument (§8)                      |
+
+Repositories referenced: `github.com/tx7do/go-wind-cms`, `github.com/tx7do/go-wind-admin`,
+`github.com/tx7do/go-wind-shop`. Commit hashes below are cited by the author in the security
+post; they are **not** pinned to a revision this document verified, and the source does not
+state which repository each belongs to — verify against `go-wind-shop` before relying on them.
 
 ## TL;DR
 
@@ -23,7 +59,7 @@ the originals before citing them externally.
   `"some_api_key"`, CORS `*`, EC keys committed, migrate:true) are dev-only and require
   operator work before production — the docs don't quietly assume "someone will change this."
 - Use this case study to calibrate Approach 5's Stage 2/3: it proves the transport/validation/
-  redaction generation half of Approach 2 works in production; it does **not** prove the
+  redaction generation half of Approach 2 is shippable at reference scale; it does **not** show
   authorization-decision, audit-chain, consent, or retention half — those are exactly the gap
   go-blocks has to fill that GoWind does not.
 
@@ -65,7 +101,11 @@ stubs (via `protoc-gen-go-http`), Kratos-style typed errors (`protoc-gen-go-erro
 validators (`protoc-gen-validate`), PII redactors (`protoc-gen-redact`), and TypeScript HTTP
 clients, plus a Gnostic-driven OpenAPI document. The BFF/Core boundary is encoded _in the
 proto_: only BFF-facing proto packages carry `google.api.http` options; Core packages never do,
-so a Core method is structurally incapable of being reached over HTTP.
+so a Core method has no directly generated HTTP endpoint. That is a codegen property, not a
+reachability guarantee — the Core RPC is still reachable over gRPC by anything that can route to
+it, and a hand-written gateway could expose it over HTTP. What actually keeps Core private is
+network placement plus etcd registration for internal discovery only; the proto convention
+removes the accidental path, not the deliberate one.
 
 ## Deep dive by component and decision
 
@@ -121,20 +161,25 @@ Approach 1 in this repo calls out as the reason interfaces must be consumer-defi
 one interface serving every caller degrades to `map[string]any`.
 
 Given that, gRPC internally / REST externally is the obvious next call, and he states the
-reasoning plainly rather than treating it as folklore: gRPC's binary Protobuf wire format is
-smaller and faster than JSON, and gets service discovery, circuit breaking, and timeouts "for
-free" without extra wrapping. REST at the edge exists because "all frontend ecosystems natively
+reasoning plainly rather than treating it as folklore: Protobuf's binary wire format is more
+compact and cheaper to serialize than JSON. The resilience features he groups under the same
+heading come from Kratos, not from Protobuf or gRPC themselves — service discovery from the
+etcd registry (`registry.yaml`), and retry, circuit breaking, and timeouts from Kratos client
+middleware (`client.yaml`'s `enable_circuit_breaker` and `timeout`, plus `retry.Middleware` and
+`circuitbreaker.Middleware` on the gRPC dial options). The real saving is that Kratos ships
+these for the gRPC transport, so no per-service wrapper gets written. REST at the edge exists because "all frontend ecosystems natively
 support HTTP" while gRPC-Web needs special client tooling — unifying on gRPC at the edge would
 have pushed unnecessary integration cost onto every frontend variant (four exist: Nuxt,
 Next.js, Taro, Flutter).
 
-**A structural rule enforced in code, not by convention**: BFF services' `internal/data/wire_set.go`
-contains _only_ Redis, MinIO, etcd discovery, and gRPC client factories — no `NewXxxRepo`, no
-Ent client. Core alone wires an Ent client and ~50 repository factories. This is a compile-time
-guarantee, matching exactly the CI import-graph rule Approach 5 already proposes for the
-seam — tx7do enforces the same boundary by omission of a Wire provider rather than a lint rule,
-which is weaker (nothing stops someone from adding an Ent import to a BFF file) but the intent is
-identical: _"这个约束的价值在于:把'数据落点'收敛到一处"_ — the value of this constraint is
+**A structural rule expressed as a dependency-injection convention**: the BFF's Wire provider
+set — at `backend/app/admin/service/internal/data/providers/wire_set.go` in the current public
+`go-wind-cms` tree — contains _only_ Redis, MinIO, etcd discovery, and gRPC client factories:
+no `NewXxxRepo`, no Ent client. Core alone wires an Ent client and its repository factories.
+This is a convention, not a compile-time guarantee — Wire constrains the generated dependency
+graph, but nothing stops another BFF file from importing Ent and constructing a client directly.
+Approach 5's proposed CI import-graph check is the strictly stronger form of the same boundary;
+tx7do gets the intent without the enforcement: _"这个约束的价值在于:把'数据落点'收敛到一处"_ — the value of this constraint is
 converging the "point where data lands" to exactly one place, so that row-level isolation,
 audit, and masking only ever need implementing once.
 
@@ -150,13 +195,19 @@ The three-service shape is the deliberate middle: _"用一跳网络 latency 和�
 收敛和鉴权审计一致性"_ — trade one network hop and deployment complexity for converged data
 access and consistent auth/audit.
 
-**A concrete bug this design almost let through, caught and fixed at compile time**: if the
-BFF's `grpc.addr` config isn't explicitly `0.0.0.0:0`, the BFF binary opens a live gRPC port that
-bypasses the HTTP middleware chain (auth, audit) entirely — the same binary, a working bypass, if
-misconfigured. Fix: force the port to 0 so the gRPC server never compiles into the binary at all.
-Quote: _"把端口设 0 从编译期就消除这个旁路"_ — setting the port to 0 eliminates the bypass at
-compile time, not at runtime configuration. This is the same "escape hatches must not become
-silent bypasses" concern Approach 5's compliance doc raises for authz.
+**A bypass this design has to actively suppress**: the BFF's HTTP middleware chain is where
+auth and audit live, so any gRPC server in the same binary is a path around both. GoWind sets
+`grpc.addr: "0.0.0.0:0"` and the author describes this as eliminating the bypass at compile
+time — _"把端口设 0 从编译期就消除这个旁路"_.
+
+**That description is wrong, and worth flagging rather than repeating.** Port 0 is not "no
+server": the BFF still constructs the gRPC server, and Kratos still calls `net.Listen`, which
+binds an ephemeral port on all local interfaces. The result is a live gRPC path outside the REST
+middleware chain — harder to find, not absent. Closing it properly means not constructing the
+gRPC server in the BFF binary at all, or enforcing a network policy that makes the port
+unreachable. go-blocks should take the concern and reject the mechanism: this is exactly the
+"an escape hatch must not become a silent bypass" failure mode `10-compliance-blocks.md` raises
+for authz, and it shows how easily a config value gets mistaken for a structural guarantee.
 
 ### 3. The seven-stage request path, concretely
 
@@ -232,7 +283,11 @@ _without_ refresh — a deliberate asymmetry because buyer devices are less trus
 operator sessions. Token validation is five sequential checks (signature, expiry, claims mapping,
 Redis JTI lookup, blocklist), and _any single failure rejects_ — "not default allowance." Audit
 entries carry a SHA-256 content hash plus an ECDSA signature binding operator identity,
-timestamp, and hash together, so a tampered field breaks the signature chain.
+timestamp, and hash together, so a tampered field breaks signature verification for that record.
+These are _signed audit records_, not a hash chain — nothing in the corpus describes a
+previous-record hash, a sequence number, append-only storage, or a chain-verification pass, so
+deleting a whole record leaves no detectable gap. The chained form is what
+`10-compliance-blocks.md` specifies for go-blocks; GoWind stops one step short of it.
 
 Row isolation is Ent privacy policies at the ORM layer, not developer-remembered `WHERE`
 clauses — but he documents a real near-miss (commit `bc9e015`): the
@@ -273,8 +328,9 @@ holes," it's "you can't see where the holes are." This is the same posture Appro
 Beyond the six artefact classes named in the TL;DR, two generation choices are worth their own
 note because Approach 2 in this repo proposes going further than tx7do actually did:
 
-- **PII redaction is proto-annotated and code-generated**, via a custom `protoc-gen-redact`
-  plugin: `string email = 3 [(redact.v3.value).string = "r*d@ct*d"];` generates a sibling
+- **PII redaction is proto-annotated and code-generated**, via a third-party
+  `protoc-gen-redact` plugin: `string email = 3 [(redact.v3.value).string = "r*d@ct*d"];`
+  generates a sibling
   `*.redact.pb.go` file with a `Redact()` method per message, called explicitly by handler code
   (`redactedUser := rawUser.Redact()`) — it is not automatically invoked by the transport layer.
   Rationale given: _"脱敏规则与消息结构强绑定，避免跨层配置不一致"_ — binding the rule to the
@@ -283,7 +339,11 @@ note because Approach 2 in this repo proposes going further than tx7do actually 
   tx7do's version stops at masking a fixed replacement string or pattern — there's no visible
   purpose-based access check (e.g., "redact unless the actor holds `contact:read` for this
   purpose") gating the call. Approach 5's `pii.Classifier.Permits(ctx, actor, purpose)` is a step
-  beyond what's shown here.
+  beyond what's shown here. **Pin both halves before adopting this**: the `redact.v3.value`
+  option syntax belongs to the `buf.build/menta2k-org/redact` module and its matching
+  `github.com/menta2k/protoc-gen-redact/v3` generator — a differently-named fork
+  (`arrakis-digital/protoc-gen-redact`) uses a `redact.custom` API instead, so an unpinned
+  module revision and generator version can silently stop matching each other.
 - **Authorization is not proto-generated at all.** `authz.Server()` is a Kratos middleware that
   calls out to Casbin/OPA; there is no proto extension declaring `authorize:
 "menu_item.publish"` the way `02-approach-proto-compiler.md` proposes. The policy check is
@@ -319,17 +379,18 @@ runtime introspection. So GoWind validates "make the repo legible to a coding ag
 nothing about "make the running system operable by an agent," which remains Approach 3/5's
 territory, unproven here.
 
-## Evidence this works in practice
+## Evidence this has shipped (all self-reported)
 
 - Live demo deployments are public and named directly: `demo.admin.gowind.cloud` (admin frontend)
   and its Swagger docs at `api.demo.admin.gowind.cloud/docs/`; a separate CMS admin demo at
   `admin.cms.gowind.cloud`.
 - Named, dated, real bug-fix commits are cited by hash (`bc9e015`, `662e0b0`, `7ac25ff`,
-  `f82faa0`) rather than described abstractly — the security post documents production incidents
-  and their fixes, not a hypothetical threat model.
-- The architecture-evolution post is a retrospective of an actual production migration (monolith
-  → split services) with before/after numbers (30+ Wire providers → per-service subsets; 30s+
-  startup → 5–10s), not a green-field design document.
+  `f82faa0`) rather than described abstractly — the security post presents them as real incidents
+  and their fixes rather than a hypothetical threat model, though neither the repository nor the
+  revision is stated in the source.
+- The architecture-evolution post reads as a retrospective of a migration already carried out
+  (monolith → split services), with self-reported before/after numbers (30+ Wire providers →
+  per-service subsets; 30s+ startup → 5–10s) rather than green-field design targets.
 - Multiple independent products (`go-wind-admin`, `go-wind-cms`, `go-wind-shop`) reuse the same
   Core/BFF shape and the same supporting libraries (`kratos-authn`, `kratos-authz`,
   `kratos-transport`, `go-crud`), suggesting the pattern generalizes across at least three
@@ -342,7 +403,7 @@ territory, unproven here.
 
 | Dimension                                                         | tx7do / GoWind                                                                        | Closest go-blocks approach                                                  |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Transport/validation/error/redaction/client generation from proto | Yes, six artefact classes, in production                                              | Approach 2 (same idea, more ambitious: generates business-logic bodies too) |
+| Transport/validation/error/redaction/client generation from proto | Yes, six artefact classes, shipped publicly                                           | Approach 2 (same idea, more ambitious: generates business-logic bodies too) |
 | Data layer, row-level isolation                                   | Ent + privacy policies                                                                | Approach 4 (Ent schema as DSL)                                              |
 | Runtime action registry / introspection                           | Absent                                                                                | Approach 3 (proposed, unproven even here)                                   |
 | Authorization derived from proto annotations                      | Absent — hand-wired Casbin/OPA middleware                                             | Approach 2's `authorize` extension (proposed, unproven)                     |
@@ -354,7 +415,8 @@ territory, unproven here.
 
 **Bottom line for the comparative README**: GoWind is the strongest _existing evidence_ that
 Approach 2's generation half and Approach 4's data layer work together in a real system at
-moderate scale. It supplies zero evidence, positive or negative, on Approach 3's runtime registry,
+the scale he designs for (his stated ceiling, not a measured figure). It supplies zero evidence,
+positive or negative, on Approach 3's runtime registry,
 on local-first operation, or on the compliance surface (consent, retention, DSAR) that is this
 project's actual differentiator. Approach 5 stays the right recommendation because the parts
 GoWind leaves unbuilt are exactly the parts go-blocks exists to build.

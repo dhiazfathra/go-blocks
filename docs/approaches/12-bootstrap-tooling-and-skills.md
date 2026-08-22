@@ -30,8 +30,10 @@ cannot wire is a block with a bad interface.
 ## 2. `blocksctl` — the CLI
 
 One binary, `go install`-able, no plugin system, no config file required for the happy
-path. Every command is deterministic: same inputs, byte-identical outputs, so `verify`
-in CI is meaningful.
+path. Every command is deterministic on **stdout**: same inputs, byte-identical stdout, so
+`verify` in CI is meaningful. Run-dependent values — elapsed times, rebuild durations —
+go to stderr and are explicitly non-contractual; the transcripts below show them as
+`# stderr:` lines so it is clear they are not part of the compared output.
 
 | Command             | Purpose                                                                                 | Output                                                                                                      |
 | ------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -61,9 +63,9 @@ buf generate                                  ok    18 files
 entc generate                                 ok    27 files
 wire                                          ok     1 file
 go build ./...                                ok
-go test ./...                                 ok    14 tests, 0 skipped   1.9s
+go test ./...                                 ok    14 tests, 0 skipped
+# stderr: 14 tests in 1.9s; project ready in 38s
 
-project ready in 38s
   blocksctl dev            start the local stack
   blocksctl new module     add a bounded context
 ```
@@ -186,7 +188,8 @@ sqlite mode (no docker) — use --stack full for postgres/redis/minio/otel
 migrations   applied 7                                       ok
 seed         tenant=acme users=3 menu_items=24 orders=12      ok
 serving      grpc :9000  http :8000  admin :8080
-watching     internal/ api/  (rebuild ~1.1s)
+watching     internal/ api/
+# stderr: incremental rebuild ~1.1s
 ```
 
 ```console
@@ -259,8 +262,27 @@ reviewable.
 
 **MCP server.** `blocksctl mcp` exposes the introspection and scaffolding surface as
 tools: `list_resources`, `describe_action`, `run_generate`, `new_resource`,
-`compliance_report`. Read tools are unrestricted; write tools are confined to the project
-root and always leave changes in the working tree for human review, never committed.
+`compliance_report`. Read tools are unrestricted. Write tools always leave changes in the
+working tree for human review, never committed — but "in the working tree" is not by
+itself a boundary, because a working-tree write can still be executed or exfiltrated
+before anyone reviews it. The write boundary is therefore defined positively:
+
+- **Canonical-path containment.** Every target path is resolved to its canonical form
+  (symlinks followed, `..` collapsed) and rejected unless the result is still inside the
+  project root. Resolving after joining, not before, is the point — otherwise a symlink
+  planted inside the root escapes it.
+- **No symlink traversal.** A write whose path passes through a symlink at any component
+  is refused outright rather than followed.
+- **Denied regardless of containment**: `.git/` in its entirety (hooks execute on the next
+  local git command), CI and workflow definitions, anything matching the ignore rules for
+  secrets (`.env*`, key material, credential files), and the tool's own configuration.
+- **Allowlist for what write tools may touch at all**: generated output directories,
+  `api/`, `internal/modules/`, and test files. Anything outside that set requires an
+  explicit human-approved path, not a write-tool call.
+
+Both the containment check and the deny list are enforced in the MCP server, not in the
+agent prompt — a prompt-level rule is a suggestion to something that may be under an
+injection attack.
 
 ### Risks, stated plainly
 

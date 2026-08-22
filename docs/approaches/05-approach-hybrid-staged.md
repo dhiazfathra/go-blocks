@@ -190,15 +190,32 @@ type Resolver interface {
 
 // blocks/audit/audit.go — payloads are classified and redacted before they are a
 // value of this type; `any` here would be an open invitation to log raw PII.
+//
+// Payload is deliberately opaque: exported fields would let a caller hand
+// Recorder raw PII carrying a false pii.Class, and Record has no way to detect a
+// wrong classification. audit.Redact is the only constructor, and the only read
+// paths are the accessors below, none of which can introduce a raw value.
 type Payload struct {
-	Fields map[string]Value // redacted per pii.Class at construction time
+	fields map[string]value // redacted per pii.Class at construction time
 }
 
-type Value struct {
-	Class     pii.Class
-	Redacted  string // rendered form, already masked or hashed for PII classes
-	Truncated bool
+type value struct {
+	class     pii.Class
+	redacted  string // rendered form, already masked or hashed for PII classes
+	truncated bool
 }
+
+// Redact is the sole constructor. It walks the resource's registered PII
+// classification and renders each field through the classifier, so an unclassified
+// field is an error rather than a passthrough.
+func Redact(c pii.Classifier, resource string, m any) (*Payload, error)
+
+// Read paths. Names, classes, and already-redacted renderings only — there is no
+// accessor that returns, or accepts, an unredacted value.
+func (p *Payload) Names() []string
+func (p *Payload) Class(name string) (pii.Class, bool)
+func (p *Payload) Redacted(name string) (string, bool)
+func (p *Payload) MarshalJSON() ([]byte, error)
 
 type Event struct {
 	Actor     Actor  // required
@@ -217,8 +234,8 @@ type Event struct {
 
 // Record fails closed: it returns an error, and writes nothing, if any required
 // field is empty or if a Payload contains a field with no pii.Class assigned.
-// Callers build Payloads through audit.Redact(classifier, resource, m), which is
-// the only exported constructor.
+// Because Payload's fields are unexported and audit.Redact is its only
+// constructor, a caller outside the block cannot fabricate one at all.
 type Recorder interface {
 	Record(ctx context.Context, e Event) error
 }
